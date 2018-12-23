@@ -25,9 +25,12 @@
 #include "window.hh"
 #include "word_db.hh"
 
+#include <future>
+
 namespace Kakoune
 {
 
+using namespace std;
 using namespace std::placeholders;
 
 enum class SelectMode
@@ -553,6 +556,8 @@ void pipe(Context& context, NormalParams)
                 ScopedEdition edition(context);
                 ForwardChangesTracker changes_tracker;
                 size_t timestamp = buffer.timestamp();
+                struct result {BufferCoord beg;String in;String out;};
+                std::vector<std::future<result>> handles;
                 for (int i = 0; i < selections.size(); ++i)
                 {
                     selections.set_main_index(i);
@@ -568,17 +573,23 @@ void pipe(Context& context, NormalParams)
                     // Needed in case we read selections inside the cmdline
                     context.selections_write_only() = selections;
 
-                    String out = ShellManager::instance().eval(
-                        cmdline, context, in,
-                        ShellManager::Flags::WaitForStdout).first;
+                    handles.push_back(std::async(std::launch::async,[&]() {
+                            String out = ShellManager::instance().eval(cmdline, context, in,
+                                ShellManager::Flags::WaitForStdout).first;
+                            if (insert_eol)
+                            {
+                                in.resize(in.length()-1, 0);
+                                if (not out.empty() and out.back() == '\n')
+                                    out.resize(out.length()-1, 0);
+                            }
+                            return result {beg,in,out};
+                    }));
 
-                    if (insert_eol)
-                    {
-                        in.resize(in.length()-1, 0);
-                        if (not out.empty() and out.back() == '\n')
-                            out.resize(out.length()-1, 0);
-                    }
-                    apply_diff(buffer, beg, in, out);
+                }
+                for (auto &handle: handles) {
+                    auto res = handle.get();
+
+                    apply_diff(buffer, res.beg, res.in, res.out);
 
                     changes_tracker.update(buffer, timestamp);
                 }
