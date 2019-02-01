@@ -2437,10 +2437,10 @@ const CommandDesc declare_user_mode_cmd = {
 };
 
 // We need ownership of the mode_name in the lock case
-void enter_user_mode(Context& context, String mode_name, KeymapMode mode, bool lock)
+void enter_user_mode(Context& context, String mode_name, KeymapMode mode, bool lock, int count)
 {
     on_next_key_with_autoinfo(context, format("user.{}", mode_name), KeymapMode::None,
-                             [mode_name, mode, lock](Key key, Context& context) mutable {
+                             [mode_name, mode, lock, count](Key key, Context& context) mutable {
         if (key == Key::Escape)
             return;
         if (not context.keymaps().is_mapped(key, mode))
@@ -2449,14 +2449,14 @@ void enter_user_mode(Context& context, String mode_name, KeymapMode mode, bool l
         auto& mapping = context.keymaps().get_mapping(key, mode);
         ScopedSetBool disable_keymaps(context.keymaps_disabled());
 
-        InputHandler::ScopedForceNormal force_normal{context.input_handler(), {}};
+        InputHandler::ScopedForceNormal force_normal{context.input_handler(), {count, 0}};
 
         ScopedEdition edition(context);
         for (auto& key : mapping.keys)
             context.input_handler().handle_key(key);
 
         if (lock)
-            enter_user_mode(context, std::move(mode_name), mode, true);
+            enter_user_mode(context, std::move(mode_name), mode, true, count);
     }, lock ? format("{} (lock)", mode_name) : mode_name,
     build_autoinfo_for_mapping(context, mode, {}));
 }
@@ -2482,11 +2482,13 @@ const CommandDesc enter_user_mode_cmd = {
         }
         return {};
     },
-    [](const ParametersParser& parser, Context& context, const ShellContext&)
+    [](const ParametersParser& parser, Context& context, const ShellContext& shell_context)
     {
+        CapturedShellContext sc{shell_context};
+        int count = str_to_int(sc.env_vars["count"_sv]);
         auto lock = (bool)parser.get_switch("lock");
         KeymapMode mode = parse_keymap_mode(parser[0], context.keymaps().user_modes());
-        enter_user_mode(context, std::move(parser[0]), mode, lock);
+        enter_user_mode(context, std::move(parser[0]), mode, lock,count);
     }
 };
 
