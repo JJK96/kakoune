@@ -84,21 +84,21 @@ void highlight_range(DisplayBuffer& display_buffer,
     }
 }
 
-template<typename T>
 void replace_range(DisplayBuffer& display_buffer,
-                   BufferCoord begin, BufferCoord end, T func)
+                   BufferCoord begin, BufferCoord end, DisplayLine& replacement)
 {
     // tolerate begin > end as that can be triggered by wrong encodings
     if (begin >= end or end <= display_buffer.range().begin
                      or begin >= display_buffer.range().end)
+        // Empty lambda
         return;
 
-    for (auto& line : display_buffer.lines())
-    {
-        auto& range = line.range();
-        if (range.end <= begin or  end < range.begin)
-            continue;
-
+    DisplayBuffer::LineList& lines = display_buffer.lines();
+    auto first = lines[(int)begin.line];
+    auto last = lines[(int)end.line];
+    auto firstIndex = lines.begin() + (int)begin.line;
+    auto lastIndex = lines.begin() + (int)end.line;
+    auto func = [] (auto& line, auto begin, auto end) { 
         int beg_idx = -1, end_idx = -1;
         for (auto atom_it = line.begin(); atom_it != line.end(); ++atom_it)
         {
@@ -119,10 +119,29 @@ void replace_range(DisplayBuffer& display_buffer,
                 end_idx = (atom_it - line.begin()) + 1;
             }
         }
+        if (beg_idx != -1 and end_idx != -1) {
+            // Begin and end on the same line
+            return line.erase(line.begin() + beg_idx, line.begin() + end_idx);
+        } else if (beg_idx != -1) {
+            // End is on a different line.
+            return line.erase(line.begin() + beg_idx, line.end());
+        } else if (end_idx != -1) {
+            // Begin is on a different line
+            return line.erase(line.begin(), line.begin() + end_idx);
+        } else {
+            // Both begin and end not found
+            return line.begin();
+        }
+    };
+    auto it = func(first, begin, end);
+    func(last, begin, end);
+    lines.erase(firstIndex, lastIndex);
+    for (auto& atom : replacement)
+        it = ++first.insert(it, std::move(atom));
+    for (auto& atom : last)
+        it = ++first.insert(it, std::move(atom));
+    lines[(int)begin.line] = std::move(first);
 
-        if (beg_idx != -1 and end_idx != -1)
-            func(line, beg_idx, end_idx);
-    }
 }
 
 void apply_highlighter(HighlightContext context,
@@ -201,6 +220,7 @@ void apply_highlighter(HighlightContext context,
         return;
 
     region_display.compute_range();
+
     highlighter.highlight(context, region_display, {begin, end});
 
     for (size_t i = 0; i < region_lines.size(); ++i)
@@ -1553,26 +1573,17 @@ private:
     {
         auto& buffer = context.context.buffer();
         auto& range_and_faces = context.context.options()[m_option_name].get_mutable<RangeAndStringList>();
-        update_ranges(buffer, range_and_faces.prefix, range_and_faces.list);
-
-        for (auto& range : range_and_faces.list)
-        {
-            try
+        size_t& timestamp = range_and_faces.prefix;
+        for (int i=0; i<range_and_faces.list.size(); ++i) {
+            update_ranges(buffer, timestamp, range_and_faces.list);
+            timestamp = buffer.timestamp();
+            auto &range = range_and_faces.list[i];
+            auto& r = std::get<0>(range);
+            if (buffer.is_valid(r.first) and buffer.is_valid(r.last))
             {
-                auto& r = std::get<0>(range);
-                if (buffer.is_valid(r.first) and buffer.is_valid(r.last))
-                {
-                    auto replacement = parse_display_line(std::get<1>(range), context.context.faces());
-                    replace_range(display_buffer, r.first, buffer.char_next(r.last),
-                                  [&](DisplayLine& line, int beg_idx, int end_idx){
-                                      auto it = line.erase(line.begin() + beg_idx, line.begin() + end_idx);
-                                      for (auto& atom : replacement)
-                                          it = ++line.insert(it, std::move(atom));
-                                  });
-                }
+                auto replacement = parse_display_line(std::get<1>(range), context.context.faces());
+                replace_range(display_buffer, r.first, buffer.char_next(r.last), replacement);
             }
-            catch (runtime_error&)
-            {}
         }
     }
 
