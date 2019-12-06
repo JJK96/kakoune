@@ -93,7 +93,7 @@ void replace_range(DisplayBuffer& display_buffer,
         // Empty lambda
         return;
 
-    DisplayBuffer::LineList& lines = display_buffer.lines();
+    auto& lines = display_buffer.lines();
     auto first = lines[(int)begin.line];
     auto last = lines[(int)end.line];
     auto firstIndex = lines.begin() + (int)begin.line;
